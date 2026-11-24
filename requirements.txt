@@ -1,0 +1,7 @@
+aiogram>=3.20,<4
+aiosqlite>=0.20
+folium>=0.17
+matplotlib>=3.8
+python-dotenv>=1.0
+telethon>=1.36   # необязательно: нужен только для сбора из каналов
+tzdata           # часовые пояса на Windows
