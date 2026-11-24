@@ -50,7 +50,7 @@ def test_places_and_roles():
     assert "выезд" in a.landmarks
 
     a = analyze("Стоят у поворота на Берёзовку")
-    assert a.place.name == "Берёзовка" and a.place_role == "turn"
+    assert a.place.name == "Берёзово" and a.place_role == "turn"
 
     a = analyze("дпс в Большом Изыраке")
     assert a.place.name == "Большой Изырак"

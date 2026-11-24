@@ -389,7 +389,7 @@ async def cb_places(cb: CallbackQuery, callback_data: AdmCb, app: App):
     text = ("📍 <b>Места и ориентиры</b>\n✅ задано админом · 🗺 из OSM · ≈ примерно\n\n"
             + ("\n".join(lines) or "Своих ориентиров пока нет.")
             + "\n\n<b>Добавить ориентир:</b> <code>/setplace ТЦ Радуга; радуга, у радуги</code> → отправить точку\n"
-              "<b>Уточнить село:</b> <code>/setvillage Бажинск</code> → отправить точку")
+              "<b>Уточнить или добавить село:</b> <code>/setvillage Бажинск</code> → отправить точку")
     if approx:
         text += f"\n\n≈ Приблизительные координаты у: {esc(', '.join(approx[:15]))}{'…' if len(approx) > 15 else ''}"
     await _show(cb, text, b.as_markup())
@@ -406,11 +406,8 @@ async def cmd_setplace(message: Message, command: CommandObject, state: FSMConte
     is_village = command.command == "setvillage"
     if is_village:
         p = next((v for v in app.geo.villages() if v.name.lower().replace("ё", "е") == name.lower().replace("ё", "е")), None)
-        if not p:
-            await message.answer("Такого села нет в справочнике. Добавить новое: /setplace — "
-                                 "или проверьте написание.")
-            return
-        name = p.name
+        if p:
+            name = p.name  # уточняем существующее, иначе добавляем новое село
     await state.set_state(AdmSt.place_loc)
     await state.update_data(place_name=name, place_aliases=[a.strip() for a in aliases.split(",") if a.strip()],
                             place_kind="village" if is_village else "landmark")

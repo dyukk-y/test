@@ -104,6 +104,7 @@ class Geo:
             self._session = aiohttp.ClientSession(
                 headers={"User-Agent": self.cfg.nominatim_user_agent},
                 timeout=aiohttp.ClientTimeout(total=12),
+                trust_env=True,  # учитывать HTTPS_PROXY / SSL_CERT_FILE окружения
             )
         return self._session
 
@@ -160,7 +161,7 @@ class Geo:
             found = await self.nominatim(f"{p.name}, {self.cfg.region_query}", settlement_only=True)
             if not self.online:
                 break
-            if found and haversine(found[0], found[1], p.lat, p.lon) < 40:
+            if found:
                 await self.db.run(
                     """INSERT INTO places(key, name, lat, lon, kind, verified, updated_at)
                        VALUES (?, ?, ?, ?, 'village', 1, ?)

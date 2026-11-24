@@ -5,3 +5,4 @@ matplotlib>=3.8
 python-dotenv>=1.0
 telethon>=1.36   # необязательно: нужен только для сбора из каналов
 tzdata           # часовые пояса на Windows
+aiohttp-socks    # прокси для Telegram (TELEGRAM_PROXY), если api.telegram.org недоступен

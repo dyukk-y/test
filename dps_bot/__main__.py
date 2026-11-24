@@ -4,11 +4,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import ssl
 import sys
 from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
@@ -23,6 +25,20 @@ from .middlewares import ThrottleMiddleware, UserMiddleware
 from .notify import Notifier
 from .parser import ChannelParser
 from .tasks import start_all
+
+
+def make_session() -> AiohttpSession | None:
+    """Прокси для Telegram API (TELEGRAM_PROXY или HTTPS_PROXY): http://, socks5://.
+
+    Пригодится, если api.telegram.org недоступен напрямую. Нужен пакет aiohttp-socks."""
+    proxy = os.environ.get("TELEGRAM_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if not proxy:
+        return None
+    session = AiohttpSession(proxy=proxy)
+    cafile = os.environ.get("SSL_CERT_FILE")
+    if cafile:  # корпоративный/прокси-сертификат
+        session._connector_init["ssl"] = ssl.create_default_context(cafile=cafile)
+    return session
 
 
 def setup_dispatcher(app: App, throttle: float = 0.3) -> Dispatcher:
@@ -60,7 +76,7 @@ async def main() -> None:
     geo = Geo(db, cfg)
     await geo.load_places()
 
-    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML,
+    bot = Bot(cfg.bot_token, session=make_session(), default=DefaultBotProperties(parse_mode=ParseMode.HTML,
                                                           link_preview_is_disabled=True))
     app = App(bot=bot, cfg=cfg, db=db, geo=geo, events=EventService(db), notifier=Notifier(bot, db, geo, cfg))
     app.parser = ChannelParser(app)
