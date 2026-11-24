@@ -7,9 +7,8 @@ from datetime import datetime, timezone
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.types import Chat, Message, MessageId, User
+from aiogram.types import Chat, Message, MessageId
 
-BOT_USER = User(id=1, is_bot=True, first_name="DPS", username="dps_test_bot")
 
 
 class FakeSession(BaseSession):
@@ -21,16 +20,17 @@ class FakeSession(BaseSession):
     async def make_request(self, bot, method, timeout=None):
         self.calls.append(method)
         ret = getattr(method, "__returning__", None)
-        if ret is Message:
+        name = getattr(ret, "__name__", str(ret))
+        if name == "Message":
             chat_id = getattr(method, "chat_id", 0) or 0
             return Message(message_id=next(self._ids), date=datetime.now(timezone.utc),
                            chat=Chat(id=int(chat_id) if str(chat_id).lstrip("-").isdigit() else 0, type="private"),
                            text=getattr(method, "text", None) or getattr(method, "caption", None) or "")
-        if ret is User:
-            return BOT_USER
-        if ret is MessageId:
+        if name in ("User", "BotFullInfo"):
+            return ret.model_construct(id=1, is_bot=True, first_name="DPS", username="dps_test_bot")
+        if name == "MessageId":
             return MessageId(message_id=next(self._ids))
-        if ret is bool:
+        if name == "bool":
             return True
         return None
 

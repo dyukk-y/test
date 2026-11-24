@@ -24,46 +24,49 @@ def accuracy_line(method: str | None, acc: int | None) -> str:
 
 def event_title(e) -> str:
     k = kind(e["kind"])
-    place = e["place"] or "место не указано"
-    return f"{k.emoji} <b>{k.title}</b> — {esc(place)}"
+    return f"{k.emoji} <b>{k.title}</b> · {esc(e['place'] or 'место не указано')}"
+
+
+STATUS = {"pending": "⏳ <i>на проверке у модератора</i>", "closed": "✔️ <i>уже неактуально</i>",
+          "fake": "🚫 <i>признано фейком</i>", "rejected": "❌ <i>отклонено</i>"}
 
 
 def event_card(e, tz, user_lat: float | None = None, user_lon: float | None = None) -> str:
-    lines = [event_title(e)]
+    lines = [event_title(e), ""]
     if e["direction"]:
-        lines.append(f"➡️ Направление: в сторону {esc(e['direction'])}")
+        lines.append(f"➡️ в сторону <b>{esc(e['direction'])}</b>")
     if e["plate"]:
-        lines.append(f"🚗 Номер: <code>{esc(e['plate'])}</code>")
-    lines.append(f"🕐 {local(e['created_at'], tz, '%H:%M')} ({ago(e['created_at'])}), "
-                 f"обновлено {ago(e['updated_at'])}")
-    lines.append(accuracy_line(e["geo_method"], e["accuracy_m"]))
+        lines.append(f"🚗 номер <code>{esc(e['plate'])}</code>")
+    lines.append(f"🕐 {local(e['created_at'], tz, '%H:%M')} · {ago(e['created_at'])}")
+    lines.append(f"🎯 {accuracy_line(e['geo_method'], e['accuracy_m'])}")
     if user_lat is not None and e["lat"] is not None:
         d = haversine(user_lat, user_lon, e["lat"], e["lon"])
-        lines.append(f"{arrow(bearing(user_lat, user_lon, e['lat'], e['lon']))} {dist_str(d)} от вас")
-    votes = f"👍 {e['confirms']}  👋 {e['gone']}  🚫 {e['denies']}"
+        lines.append(f"{arrow(bearing(user_lat, user_lon, e['lat'], e['lon']))} <b>{dist_str(d)}</b> от вас")
+    votes = f"👍 {e['confirms']} стоят · 👋 {e['gone']} уехали"
+    if e["denies"]:
+        votes += f" · 🚫 {e['denies']}"
     if e["reports"] > 1:
-        votes += f"  📣 сообщили {e['reports']} раз"
-    lines.append(votes)
-    status = {"pending": "⏳ на проверке", "closed": "✔️ неактуально", "fake": "🚫 фейк",
-              "rejected": "❌ отклонено"}.get(e["status"])
-    if status:
-        lines.append(status)
+        votes += f" · 📣 ×{e['reports']}"
+    lines += ["", votes]
+    if e["status"] in STATUS:
+        lines.append(STATUS[e["status"]])
     if e["text"]:
-        text = e["text"] if len(e["text"]) < 300 else e["text"][:300] + "…"
-        lines.append(f"\n💬 <i>{esc(text)}</i>")
-    lines.append(f"\n<code>#{e['id']}</code> · источник: {SOURCE.get(e['source'], e['source'])}")
+        text = e["text"] if len(e["text"]) < 400 else e["text"][:400] + "…"
+        lines.append(f"<blockquote>{esc(text)}</blockquote>")
+    lines.append(f"<i>#{e['id']} · {SOURCE.get(e['source'], e['source'])}</i>")
     return "\n".join(lines)
 
 
 def event_line(e, tz, user_lat=None, user_lon=None) -> str:
     k = kind(e["kind"])
-    dist = ""
+    extra = []
     if user_lat is not None and e["lat"] is not None:
         d = haversine(user_lat, user_lon, e["lat"], e["lon"])
-        dist = f" · {arrow(bearing(user_lat, user_lon, e['lat'], e['lon']))} {dist_str(d)}"
-    conf = f" · 👍{e['confirms']}" if e["confirms"] else ""
-    return (f"{k.emoji} <b>{esc(e['place'] or k.title)}</b>{dist}\n"
-            f"    {k.title}, {ago(e['created_at'])}{conf} · #{e['id']}")
+        extra.append(f"{arrow(bearing(user_lat, user_lon, e['lat'], e['lon']))} {dist_str(d)}")
+    extra.append(ago(e["created_at"]))
+    if e["confirms"]:
+        extra.append(f"👍 {e['confirms']}")
+    return f"{k.emoji} <b>{esc(e['place'] or k.title)}</b> — {k.title.lower()}\n      <i>{' · '.join(extra)}</i>"
 
 
 def analysis_preview(a: Analysis, geo_label: str | None, method: str | None, acc: int | None, kind_code: str) -> str:
@@ -82,35 +85,35 @@ def analysis_preview(a: Analysis, geo_label: str | None, method: str | None, acc
     return "\n".join(lines)
 
 
-START = (
-    "🚔 <b>DPS Guardian — {region}</b>\n\n"
-    "Помогаю водителям знать, где стоят ДПС, камеры и радары, где ДТП и опасные участки.\n\n"
-    "<b>Как пользоваться:</b>\n"
-    "• <b>Просто напишите</b>, что видите: «гайцы у моста в Бажинске» — я пойму сокращения, сленг и опечатки\n"
-    "• Нажмите <b>{loc}</b> — покажу, что рядом с вами, и можно отметить событие в 2 касания\n"
-    "• Включите <b>трансляцию геопозиции</b> в дороге — предупрежу о ДПС <i>впереди по курсу</i>\n"
-    "• Подпишитесь на свои сёла в ⚙️ Настройках — пришлю уведомление, если там появятся ДПС\n\n"
-    "Чем больше подтверждений — тем точнее карта. Спасибо, что помогаете! 🤝"
+WELCOME = (
+    "👋 <b>Привет! Я DPS Guardian — помощник водителей</b> · {region}\n\n"
+    "Показываю, где сейчас стоят ДПС, камеры и радары, где ДТП и опасные участки. "
+    "Всё это отмечают сами водители — и вы тоже можете помочь.\n\n"
+    "<b>Как сообщить</b>\n"
+    "✍️ Просто напишите мне: <i>«гайцы у моста в Бажинске»</i> — я пойму сленг и сокращения\n"
+    "📍 Или пришлите геопозицию и выберите, что видите\n\n"
+    "<b>Как не пропустить</b>\n"
+    "🔔 Подпишитесь на свои сёла в «Уведомлениях»\n"
+    "🛰 В дороге включите трансляцию геопозиции — предупрежу о ДПС <b>впереди</b>"
 )
 
 HELP = (
-    "📚 <b>Справка</b>\n\n"
-    "<b>Сообщить о событии</b>\n"
-    "Пишите как удобно: «дпс на выезде из Маслянино в сторону Новосиба», «тренога на ул. Ленина», "
-    "«ДТП на 45 км», «чисто у моста» (отбой). Можно приложить фото и подпись.\n"
-    "Самое точное — отправить геопозицию и выбрать тип события.\n\n"
-    "<b>Голосование</b>\n"
-    "✅ Стоят — продлевает событие · 👋 Уехали — закрывает · 🚫 Фейк — жалоба.\n"
-    "За подтверждённые отчёты растёт репутация, доверенные пользователи публикуют без проверки.\n\n"
-    "<b>Уведомления</b>\n"
-    "• по подписке на сёла (⚙️ Настройки → Мои сёла)\n"
-    "• по вашей точке в радиусе N км\n"
-    "• 🛰 в дороге: поделитесь <i>трансляцией геопозиции</i> (📎 → Геопозиция → Транслировать) — "
-    "бот предупредит о событиях впереди по ходу движения\n\n"
-    "<b>Прогноз</b> — где наряды обычно стоят в это время по статистике.\n\n"
-    "<b>Команды</b>\n"
-    "/start — меню · /near — что рядом · /feed — сейчас на дорогах · /map — карта\n"
-    "/forecast — прогноз · /me — моя статистика · /settings — настройки · /cancel — отмена\n\n"
-    "Бот можно добавить в местный чат водителей — он будет сам собирать отчёты из переписки "
-    "(нужно выключить privacy mode у бота в @BotFather или сделать его админом чата)."
+    "❓ <b>Справка</b>\n\n"
+    "<b>✍️ Сообщить о событии</b>\n"
+    "Пишите как удобно — я понимаю сленг, сокращения и опечатки:\n"
+    "<blockquote>дпс на выезде из Маслянино в сторону Новосиба\n"
+    "тренога на ул. Ленина\n"
+    "ДТП на 45 км\n"
+    "чисто у моста — это «отбой»</blockquote>\n"
+    "Точнее всего — геопозиция: 📎 → Геопозиция, затем выбрать тип.\n\n"
+    "<b>🗳 Голосование</b>\n"
+    "✅ Стоят — продлевает · 👋 Уехали — закрывает · 🚫 Фейк — жалоба.\n"
+    "За подтверждённые отчёты растёт репутация, и вас перестают проверять.\n\n"
+    "<b>🔔 Уведомления</b>\n"
+    "• по сёлам, на которые вы подписаны\n"
+    "• в радиусе от вашей последней точки (3 часа)\n"
+    "• 🛰 в дороге: 📎 → Геопозиция → <i>Транслировать</i> — предупрежу о том, что впереди\n\n"
+    "<b>🔮 Прогноз</b> — где наряды обычно стоят в это время.\n\n"
+    "<b>💬 В чате водителей</b> — добавьте меня в местный чат, я сам соберу отчёты из переписки.\n\n"
+    "<b>Команды:</b> /start · /near · /feed · /map · /forecast · /settings · /me · /cancel"
 )

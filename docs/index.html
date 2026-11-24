@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>DPS Guardian</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f3f5);
+    --text: var(--tg-theme-text-color, #111418);
+    --hint: var(--tg-theme-hint-color, #8a9099);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --btn: var(--tg-theme-button-color, #2481cc);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --sep: color-mix(in srgb, var(--hint) 22%, transparent);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg2); color: var(--text);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  .screen { flex: 1; overflow-y: auto; display: none; position: relative; }
+  .screen.active { display: block; }
+  #map { position: absolute; inset: 0; }
+
+  /* таб-бар */
+  nav { display: flex; background: var(--bg); border-top: 1px solid var(--sep);
+    padding-bottom: env(safe-area-inset-bottom); }
+  nav button { flex: 1; border: 0; background: none; color: var(--hint); padding: 8px 0 6px;
+    font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; }
+  nav button .i { font-size: 21px; line-height: 1; }
+  nav button.active { color: var(--btn); font-weight: 600; }
+
+  /* плашки на карте */
+  .chip { position: absolute; z-index: 500; background: var(--bg); color: var(--text); border-radius: 999px;
+    padding: 7px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); font-size: 13px; }
+  #stamp { top: 10px; left: 50%; transform: translateX(-50%); white-space: nowrap; }
+  #locate { right: 10px; bottom: 16px; width: 44px; height: 44px; padding: 0; border: 0; font-size: 20px; cursor: pointer; }
+  .legend { left: 10px; bottom: 16px; border-radius: 12px; font-size: 12px; line-height: 1.6; white-space: nowrap; }
+
+  /* маркеры */
+  .mk { width: 34px; height: 34px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    display: flex; align-items: center; justify-content: center; border: 2px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+  .mk span { transform: rotate(45deg); font-size: 16px; }
+  .mk.old { opacity: .55; }
+  .vil { font-size: 11px; color: #1e7d45; font-weight: 600; text-shadow: 0 0 3px #fff, 0 0 3px #fff; white-space: nowrap; }
+  .leaflet-popup-content-wrapper { border-radius: 14px; }
+  .leaflet-popup-content { margin: 12px 14px; min-width: 210px; }
+  .pp h4 { margin: 0 0 4px; font-size: 15px; }
+  .pp .m { color: #666; font-size: 13px; margin: 2px 0; }
+  .pp .row { display: flex; gap: 6px; margin-top: 10px; }
+  .pp .row button { flex: 1; }
+
+  /* список */
+  .wrap { padding: 12px 12px 24px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--hint); margin: 14px 4px 8px; font-weight: 600; }
+  .card { background: var(--bg); border-radius: var(--radius); overflow: hidden; }
+  .item { display: flex; gap: 12px; padding: 12px 14px; align-items: center; cursor: pointer; }
+  .item + .item { border-top: 1px solid var(--sep); }
+  .badge { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center;
+    justify-content: center; font-size: 22px; flex-shrink: 0; }
+  .item .t { font-weight: 600; }
+  .item .s { color: var(--hint); font-size: 13px; margin-top: 2px; }
+  .item .d { margin-left: auto; text-align: right; font-size: 13px; color: var(--hint); white-space: nowrap; }
+  .item .d b { display: block; color: var(--text); font-size: 15px; }
+  .empty { text-align: center; padding: 48px 24px; color: var(--hint); }
+  .empty .big { font-size: 52px; margin-bottom: 8px; }
+  .seg { display: flex; background: var(--bg); border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { flex: 1; border: 0; padding: 7px; border-radius: 8px; background: none; color: var(--text); font-size: 13px; }
+  .seg button.on { background: var(--btn); color: var(--btn-text); }
+
+  /* сообщить */
+  .kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kind { background: var(--bg); border: 2px solid transparent; border-radius: var(--radius); padding: 14px 10px;
+    text-align: center; cursor: pointer; transition: transform .1s; }
+  .kind:active { transform: scale(.97); }
+  .kind .e { font-size: 30px; }
+  .kind .n { font-size: 13px; margin-top: 4px; font-weight: 600; }
+  .kind.on { border-color: var(--btn); background: color-mix(in srgb, var(--btn) 10%, var(--bg)); }
+  .opt { display: flex; gap: 12px; align-items: center; padding: 14px; cursor: pointer; }
+  .opt + .opt { border-top: 1px solid var(--sep); }
+  .opt .e { font-size: 22px; }
+  .opt .s { color: var(--hint); font-size: 13px; }
+  .opt.on { color: var(--btn); }
+  .opt .ck { margin-left: auto; font-size: 18px; visibility: hidden; }
+  .opt.on .ck { visibility: visible; }
+  #pickmap { height: 230px; border-radius: var(--radius); margin-top: 8px; display: none; }
+  .btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 13px; font-size: 15px; font-weight: 600;
+    background: var(--btn); color: var(--btn-text); cursor: pointer; }
+  .btn.sec { background: color-mix(in srgb, var(--btn) 12%, var(--bg)); color: var(--btn); }
+  .btn:disabled { opacity: .45; }
+  .note { color: var(--hint); font-size: 13px; padding: 8px 4px; }
+  .warn { background: #fff3cd; color: #6b5200; border-radius: 12px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <section class="screen active" id="s-map">
+    <div id="map"></div>
+    <div class="chip" id="stamp">Загрузка…</div>
+    <button class="chip" id="locate" title="Где я">📍</button>
+  </section>
+
+  <section class="screen" id="s-list">
+    <div class="wrap">
+      <div id="stale"></div>
+      <div class="seg" id="sort">
+        <button data-s="dist" class="on">Ближайшие</button>
+        <button data-s="time">Свежие</button>
+      </div>
+      <h2 id="list-title">Сейчас на дорогах</h2>
+      <div id="list"></div>
+    </div>
+  </section>
+
+  <section class="screen" id="s-report">
+    <div class="wrap">
+      <h2>Что вы видите?</h2>
+      <div class="kinds" id="kinds"></div>
+      <h2>Где?</h2>
+      <div class="card">
+        <div class="opt on" data-w="gps"><span class="e">📡</span><div><div>Здесь, где я сейчас</div>
+          <div class="s" id="gps-state">точно, по GPS</div></div><span class="ck">✓</span></div>
+        <div class="opt" data-w="map"><span class="e">🗺</span><div><div>Отметить на карте</div>
+          <div class="s">нажмите на карту, чтобы поставить точку</div></div><span class="ck">✓</span></div>
+      </div>
+      <div id="pickmap"></div>
+      <p class="note">Подробности (номер, направление) можно потом дописать боту сообщением.</p>
+      <button class="btn" id="send" disabled>Отправить</button>
+    </div>
+  </section>
+
+  <nav>
+    <button data-t="map" class="active"><span class="i">🗺</span>Карта</button>
+    <button data-t="list"><span class="i">📋</span>Список</button>
+    <button data-t="report"><span class="i">🚨</span>Сообщить</button>
+  </nav>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+
+const KINDS = {
+  p: { code: "police",   e: "🚔", n: "ДПС",        c: "#d63031" },
+  r: { code: "radar",    e: "📡", n: "Радар",      c: "#8e44ad" },
+  c: { code: "camera",   e: "📷", n: "Камера",     c: "#0984e3" },
+  x: { code: "raid",     e: "🚧", n: "Рейд",       c: "#8e0000" },
+  a: { code: "accident", e: "💥", n: "ДТП",        c: "#e67e22" },
+  h: { code: "hazard",   e: "⚠️", n: "Опасность",  c: "#16a085" },
+};
+const VILLAGES = [["Маслянино",54.3455,84.2107],["Александровка",54.4353,84.365],["Бажинск",54.3726,84.2764],
+  ["Барсуково",54.39,83.9364],["Берёзово",54.5132,83.9803],["Большой Изырак",54.5141,84.2702],["Борково",54.2247,84.0583],
+  ["Верх-Ики",54.6039,84.1333],["Дресвянка",54.199,84.5435],["Дубровка",54.4644,84.7214],["Егорьевское",54.4989,84.5979],
+  ["Елбань",54.3189,84.5938],["Жерновка",54.3338,84.6891],["Загора",54.3024,84.6041],["Кинтереп",54.4805,83.9872],
+  ["Мамоново",54.3094,84.2635],["Никоново",54.437,83.9733],["Пайвино",54.4027,84.1219],["Пеньково",54.3365,83.9889],
+  ["Петропавловка",54.2837,83.9552],["Прямское",54.3227,83.8555],["Суенга",54.4035,84.5394],["Чупино",54.3991,84.1618]];
+const CENTER = [54.40, 84.25], BOUNDS = [[54.0, 83.6], [54.7, 84.9]];
+
+// ---------- данные из ссылки (#d=base64url(JSON))
+function decode() {
+  try {
+    const m = location.hash.match(/d=([^&]+)/);
+    if (!m) return null;
+    let s = m[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const bytes = Uint8Array.from(atob(s), ch => ch.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) { console.error(e); return null; }
+}
+const D = decode() || { e: [], t: 0, b: "" };
+const BOT = D.b || (tg?.initDataUnsafe?.receiver?.username) || "";
+const events = (D.e || []).map(a => ({ id: a[0], k: a[1], lat: a[2], lon: a[3], ts: a[4], ok: a[5], gone: a[6],
+  place: a[7] || "", dir: a[8] || "", acc: a[9] || 0 }));
+let me = D.u ? { lat: D.u[0], lon: D.u[1] } : null;
+
+// ---------- утилиты
+const haptic = t => tg?.HapticFeedback?.impactOccurred?.(t || "light");
+function ago(ts) {
+  const m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+  if (m < 1) return "только что"; if (m < 60) return m + " мин назад";
+  return Math.floor(m / 60) + " ч " + (m % 60) + " мин назад";
+}
+function dist(a, b) {
+  const R = 6371, r = x => x * Math.PI / 180, dLat = r(b.lat - a.lat), dLon = r(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const fmtD = km => km < 1 ? Math.round(km * 100) * 10 + " м" : km.toFixed(1) + " км";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function toBot(param) {
+  haptic("medium");
+  if (!BOT) { tg?.showAlert?.("Откройте карту из бота, чтобы отправлять отчёты."); return; }
+  const url = `https://t.me/${BOT}?start=${param}`;
+  if (tg?.openTelegramLink) { tg.openTelegramLink(url); setTimeout(() => tg.close(), 300); }
+  else location.href = url;
+}
+function locateMe(cb) {
+  if (!navigator.geolocation) return cb(null);
+  navigator.geolocation.getCurrentPosition(
+    p => { me = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }; cb(me); },
+    () => cb(null), { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+}
+
+// ---------- карта
+const map = L.map("map", { zoomControl: false, attributionControl: true }).setView(CENTER, 10);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+map.attributionControl.setPrefix(false);
+VILLAGES.forEach(([n, la, lo]) => L.marker([la, lo], {
+  icon: L.divIcon({ className: "", html: `<div class="vil">● ${n}</div>`, iconAnchor: [4, 8] }), interactive: false
+}).addTo(map));
+
+function popupHtml(e) {
+  const k = KINDS[e.k] || KINDS.p;
+  return `<div class="pp"><h4>${k.e} ${k.n} · #${e.id}</h4>
+    <div class="m">📍 ${esc(e.place)}</div>
+    ${e.dir ? `<div class="m">➡️ в сторону ${esc(e.dir)}</div>` : ""}
+    <div class="m">🕐 ${ago(e.ts)} · 👍 ${e.ok} · 👋 ${e.gone}</div>
+    ${me ? `<div class="m">📏 ${fmtD(dist(me, e))} от вас</div>` : ""}
+    <div class="row"><button class="btn" onclick="toBot('v_${e.id}_h')">✅ Стоят</button>
+    <button class="btn sec" onclick="toBot('v_${e.id}_g')">👋 Уехали</button></div></div>`;
+}
+const markers = {};
+events.forEach(e => {
+  const k = KINDS[e.k] || KINDS.p;
+  const old = (Date.now() / 1000 - e.ts) > 3600;
+  const m = L.marker([e.lat, e.lon], { icon: L.divIcon({ className: "",
+    html: `<div class="mk${old ? " old" : ""}" style="background:${k.c}"><span>${k.e}</span></div>`,
+    iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }) }).addTo(map).bindPopup(() => popupHtml(e));
+  if (e.acc > 300) L.circle([e.lat, e.lon], { radius: e.acc, color: k.c, weight: 1, fillOpacity: .07 }).addTo(map);
+  markers[e.id] = m;
+});
+let meMarker = null;
+function showMe() {
+  if (!me) return;
+  if (meMarker) meMarker.setLatLng([me.lat, me.lon]);
+  else meMarker = L.circleMarker([me.lat, me.lon], { radius: 8, color: "#fff", weight: 3, fillColor: "#2481cc", fillOpacity: 1 }).addTo(map);
+}
+if (events.length) map.fitBounds(L.latLngBounds(events.map(e => [e.lat, e.lon])).pad(0.3), { maxZoom: 13 });
+if (D.f && markers[D.f]) { const e = events.find(x => x.id === D.f); map.setView([e.lat, e.lon], 14); markers[D.f].openPopup(); }
+showMe();
+
+const stamp = document.getElementById("stamp");
+if (!D.t) stamp.textContent = "Откройте карту из бота, чтобы увидеть события";
+else {
+  const n = events.length;
+  stamp.textContent = (n ? `${n} ${n % 10 === 1 && n % 100 !== 11 ? "событие" : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? "события" : "событий"}` : "Всё спокойно ✅")
+    + " · данные на " + new Date(D.t * 1000).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+}
+document.getElementById("locate").onclick = () => locateMe(p => {
+  if (!p) return tg?.showAlert?.("Не удалось получить геопозицию. Разрешите доступ к местоположению.");
+  showMe(); map.setView([p.lat, p.lon], 14); renderList();
+});
+const legend = L.control({ position: "bottomleft" });
+legend.onAdd = () => { const d = L.DomUtil.create("div", "chip legend");
+  d.innerHTML = Object.values(KINDS).map(k => `${k.e} ${k.n}`).join("<br>"); return d; };
+if (window.innerHeight > 520) legend.addTo(map);
+
+// ---------- список
+let sortMode = me ? "dist" : "time";
+function renderList() {
+  const box = document.getElementById("list");
+  document.getElementById("stale").innerHTML = D.t && Date.now() / 1000 - D.t > 600
+    ? `<div class="warn">Данные на ${new Date(D.t * 1000).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}. ` +
+      `<a href="#" onclick="toBot('m');return false">Обновить</a></div>` : "";
+  document.querySelectorAll("#sort button").forEach(b => b.classList.toggle("on", b.dataset.s === sortMode));
+  if (!events.length) {
+    box.innerHTML = `<div class="card empty"><div class="big">✅</div>Сейчас на дорогах спокойно.<br>Увидели ДПС — отметьте во вкладке «Сообщить».</div>`;
+    return;
+  }
+  const list = [...events].sort((a, b) => sortMode === "dist" && me ? dist(me, a) - dist(me, b) : b.ts - a.ts);
+  box.innerHTML = `<div class="card">` + list.map(e => {
+    const k = KINDS[e.k] || KINDS.p;
+    const d = me ? `<b>${fmtD(dist(me, e))}</b>` : "";
+    return `<div class="item" data-id="${e.id}">
+      <div class="badge" style="background:${k.c}22">${k.e}</div>
+      <div><div class="t">${esc(e.place || k.n)}</div><div class="s">${k.n} · ${ago(e.ts)}${e.ok ? " · 👍 " + e.ok : ""}</div></div>
+      <div class="d">${d}#${e.id}</div></div>`;
+  }).join("") + `</div>`;
+  box.querySelectorAll(".item").forEach(el => el.onclick = () => {
+    const id = +el.dataset.id, e = events.find(x => x.id === id);
+    show("map"); map.setView([e.lat, e.lon], 15); markers[id].openPopup(); haptic();
+  });
+}
+document.querySelectorAll("#sort button").forEach(b => b.onclick = () => {
+  sortMode = b.dataset.s;
+  if (sortMode === "dist" && !me) locateMe(() => renderList()); else renderList();
+});
+renderList();
+
+// ---------- сообщить
+let kindSel = null, where = "gps", picked = null, pickMap = null, pickMarker = null;
+const kindsBox = document.getElementById("kinds");
+kindsBox.innerHTML = Object.entries(KINDS).map(([c, k]) =>
+  `<div class="kind" data-k="${c}"><div class="e">${k.e}</div><div class="n">${k.n}</div></div>`).join("");
+kindsBox.querySelectorAll(".kind").forEach(el => el.onclick = () => {
+  kindSel = el.dataset.k; haptic();
+  kindsBox.querySelectorAll(".kind").forEach(x => x.classList.toggle("on", x === el));
+  if (where === "gps" && !me) requestGps();
+  refreshSend();
+});
+function requestGps() {
+  const st = document.getElementById("gps-state");
+  st.textContent = "определяю…";
+  locateMe(p => { st.textContent = p ? `точность ±${Math.round(p.acc || 30)} м` : "нет доступа к GPS — отметьте на карте"; refreshSend(); });
+}
+document.querySelectorAll(".opt").forEach(el => el.onclick = () => {
+  where = el.dataset.w; haptic();
+  document.querySelectorAll(".opt").forEach(x => x.classList.toggle("on", x === el));
+  const pm = document.getElementById("pickmap");
+  pm.style.display = where === "map" ? "block" : "none";
+  if (where === "map" && !pickMap) {
+    pickMap = L.map("pickmap", { zoomControl: false }).setView(me ? [me.lat, me.lon] : [54.3455, 84.2107], 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(pickMap);
+    pickMap.on("click", ev => {
+      picked = { lat: ev.latlng.lat, lon: ev.latlng.lng }; haptic();
+      if (pickMarker) pickMarker.setLatLng(ev.latlng); else pickMarker = L.marker(ev.latlng).addTo(pickMap);
+      refreshSend();
+    });
+  }
+  if (where === "map") setTimeout(() => pickMap.invalidateSize(), 50);
+  if (where === "gps" && !me) requestGps();
+  refreshSend();
+});
+function point() { return where === "gps" ? me : picked; }
+function inBounds(p) { return p && p.lat >= BOUNDS[0][0] && p.lat <= BOUNDS[1][0] && p.lon >= BOUNDS[0][1] && p.lon <= BOUNDS[1][1]; }
+function refreshSend() {
+  const ok = kindSel && point();
+  const btn = document.getElementById("send");
+  btn.disabled = !ok;
+  if (tg?.MainButton && current === "report") {
+    tg.MainButton.setText(ok ? `Отправить: ${KINDS[kindSel].e} ${KINDS[kindSel].n}` : "Выберите тип и место");
+    ok ? tg.MainButton.enable() : tg.MainButton.disable();
+    tg.MainButton.show();
+  }
+}
+function submit() {
+  const p = point();
+  if (!kindSel || !p) return;
+  if (!inBounds(p)) return tg?.showAlert?.("Эта точка за пределами района, который обслуживает бот.");
+  toBot(`r_${kindSel}_${Math.round(p.lat * 1e5)}_${Math.round(p.lon * 1e5)}`);
+}
+document.getElementById("send").onclick = submit;
+tg?.MainButton?.onClick(submit);
+
+// ---------- вкладки
+let current = "map";
+function show(t) {
+  current = t;
+  document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === "s-" + t));
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
+  if (t === "map") setTimeout(() => map.invalidateSize(), 30);
+  if (t === "report") refreshSend(); else tg?.MainButton?.hide();
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => { haptic(); show(b.dataset.t); });
+if (location.hash.includes("tab=report")) show("report");
+</script>
+</body>
+</html>

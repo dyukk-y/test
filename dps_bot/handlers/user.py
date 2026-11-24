@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -14,12 +14,15 @@ from ..app import App
 from ..events import NewEvent
 from ..forecast import WEEKDAYS, history_points, hotspots, hours_chart
 from ..keyboards import (BTN_FEED, BTN_FORECAST, BTN_HELP, BTN_MAP, BTN_REPORT, EvCb, NavCb, RepCb,
-                         event_kb, feed_kb, kinds_kb, location_request, main_menu, map_kb, nearby_kb,
+                         event_kb, feed_kb, home_kb, kinds_kb, location_request, main_menu, map_kb, nearby_kb,
+                         with_home,
                          report_preview_kb, villages_kb)
 from ..kinds import kind
 from ..maps import render_html, render_png
-from ..texts import HELP, START, analysis_preview, event_card, event_line
-from ..utils import esc, from_db, haversine, now_db, plural, to_db, utcnow
+from ..kinds import KINDS
+from ..texts import HELP, WELCOME, analysis_preview, event_card, event_line
+from ..webapp import build_url, parse_start
+from ..utils import ago, esc, from_db, haversine, now_db, plural, to_db, utcnow
 
 router = Router(name="user")
 router.message.filter(F.chat.type == "private")
@@ -38,6 +41,60 @@ def fresh_location(user, minutes: int = 180) -> tuple[float, float] | None:
             user["loc_time"] > now_db(timedelta(minutes=-minutes)):
         return user["lat"], user["lon"]
     return None
+
+
+async def map_url(app: App, user=None, focus: int = 0, tab: str | None = None) -> str | None:
+    """Ссылка на мини-апп со свежим снимком событий (или None, если мини-апп не настроен)."""
+    if not app.cfg.webapp_url:
+        return None
+    me = await app.bot.me()
+    events = await app.events.active(60)
+    return build_url(app.cfg.webapp_url, me.username, events, fresh_location(user) if user else None, focus, tab)
+
+
+async def home_view(app: App, user) -> tuple[str, object]:
+    events = await app.events.active(300)
+    head = f"🚔 <b>DPS Guardian</b> · {esc(app.cfg.region_name)}\n\n"
+    if not events:
+        body = "🟢 <b>На дорогах спокойно</b> — активных событий нет."
+    else:
+        counts: dict[str, int] = {}
+        for e in events:
+            counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+        by_kind = "  ".join(f"{KINDS[k].emoji} {n}" for k, n in counts.items() if k in KINDS)
+        last = events[0]
+        body = (f"🔴 <b>Сейчас на дорогах: {len(events)}</b> "
+                f"{plural(len(events), 'событие', 'события', 'событий')}\n{by_kind}\n\n"
+                f"🕐 Последнее: <b>{esc(last['place'] or '')}</b>, {ago(last['created_at'])}")
+    tail = ("\n\n✍️ <i>Видите ДПС? Просто напишите мне, где — или отметьте на карте.</i>")
+    return head + body + tail, home_kb(await map_url(app, user))
+
+
+async def update_menu_button(app: App, chat_id: int, user) -> None:
+    """Кнопка «Карта» слева от поля ввода — со свежим снимком событий."""
+    url = await map_url(app, user)
+    if not url:
+        return
+    from aiogram.types import MenuButtonWebApp, WebAppInfo
+    try:
+        await app.bot.set_chat_menu_button(chat_id=chat_id, menu_button=MenuButtonWebApp(
+            text="Карта", web_app=WebAppInfo(url=url)))
+    except Exception:
+        pass
+
+
+async def send_home(target, app: App, user, edit: bool = False) -> None:
+    text, kb = await home_view(app, user)
+    chat_id = (target.message if isinstance(target, CallbackQuery) else target).chat.id
+    await update_menu_button(app, chat_id, user)
+    if edit and isinstance(target, CallbackQuery):
+        try:
+            await target.message.edit_text(text, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    msg = target.message if isinstance(target, CallbackQuery) else target
+    await msg.answer(text, reply_markup=kb)
 
 
 async def build_draft(app: App, text: str | None, photo_id: str | None = None) -> dict:
@@ -70,7 +127,7 @@ async def publish(app: App, target: Message, user, is_admin: bool, d: dict, stat
         return
     if not is_admin and await app.events.rate_limited(uid):
         await state.clear()
-        await target.answer("⏳ Слишком много отчётов за час. Попробуйте позже.", reply_markup=main_menu())
+        await target.answer("⏳ Слишком много отчётов за час. Попробуйте позже.", reply_markup=with_home())
         return
     status = app.events.initial_status(user, is_admin)
     ev = NewEvent(kind=d["kind"] or "police", lat=d["lat"], lon=d["lon"], accuracy_m=d["acc"],
@@ -88,24 +145,68 @@ async def publish(app: App, target: Message, user, is_admin: bool, d: dict, stat
                 "Подтверждённые отчёты повышают репутацию — потом проверка не понадобится.")
     else:
         head = "✅ <b>Опубликовано! Спасибо, вы помогли водителям.</b>"
-    await target.answer(head, reply_markup=main_menu())
-    await target.answer(event_card(e, app.cfg.tz), reply_markup=event_kb(e))
+    url = await map_url(app, user, focus=e["id"])
+    await target.answer(head + "\n\n" + event_card(e, app.cfg.tz), reply_markup=with_home(event_kb(e, map_url=url)))
 
 
 # ====================================================================== старт/помощь
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, app: App, is_admin: bool):
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext, app: App, user, is_admin: bool):
     await state.clear()
-    await message.answer(START.format(region=esc(app.cfg.region_name), loc="📍 Что рядом"),
-                         reply_markup=main_menu())
-    if is_admin:
-        await message.answer("👑 Вы администратор: /admin — панель управления.")
+    deep = parse_start(command.args)
+    if deep and deep[0] == "report":  # отчёт из мини-аппа
+        _, kind_code, lat, lon = deep
+        if not app.geo.in_bounds(lat, lon):
+            await message.answer("🤔 Точка за пределами района.", reply_markup=with_home())
+            return
+        d = await build_draft(app, None)
+        d.update(kind=kind_code, lat=lat, lon=lon, acc=60, method="gps", label=app.geo.describe(lat, lon))
+        await publish(app, message, user, is_admin, d, state)
+        return
+    if deep and deep[0] == "vote":
+        _, eid, value = deep
+        msg, e = await app.events.vote(eid, message.from_user.id, value, is_admin)
+        if e is not None:
+            await message.answer(f"{msg}\n\n" + event_card(e, app.cfg.tz),
+                                 reply_markup=with_home(event_kb(e) if e["status"] in ("active", "pending") else None))
+        else:
+            await message.answer(msg, reply_markup=with_home())
+        return
+    is_new = user["created_at"] >= now_db(timedelta(minutes=-2)) and not user["reports"]
+    if is_new:
+        # новичку — знакомство, старую клавиатуру снизу убираем
+        await message.answer(WELCOME.format(region=esc(app.cfg.region_name)), reply_markup=main_menu())
+    else:
+        tmp = await message.answer("⏳", reply_markup=main_menu())
+        try:
+            await tmp.delete()
+        except Exception:
+            pass
+    await send_home(message, app, user)
+    if is_admin and not command.args:
+        await message.answer("👑 Вы администратор — /admin открывает панель управления.")
+
+
+@router.callback_query(NavCb.filter(F.to == "home"))
+async def cb_home(cb: CallbackQuery, state: FSMContext, app: App, user):
+    await state.clear()
+    await send_home(cb, app, user, edit=True)
+    await cb.answer()
 
 
 @router.message(Command("help"))
 @router.message(F.text == BTN_HELP)
 async def cmd_help(message: Message):
-    await message.answer(HELP, reply_markup=main_menu())
+    await message.answer(HELP, reply_markup=with_home())
+
+
+@router.callback_query(NavCb.filter(F.to == "help"))
+async def cb_help(cb: CallbackQuery):
+    try:
+        await cb.message.edit_text(HELP, reply_markup=with_home())
+    except Exception:
+        await cb.message.answer(HELP, reply_markup=with_home())
+    await cb.answer()
 
 
 @router.message(Command("cancel"))
@@ -115,6 +216,7 @@ async def cmd_cancel(message: Message, state: FSMContext, app: App):
         await app.parser.login_cancel(message.from_user.id)
     await state.clear()
     await message.answer("Отменено.", reply_markup=main_menu())
+    await send_home(message, app, await app.db.get_user(message.from_user.id))
 
 
 @router.callback_query(F.data == "noop")
@@ -123,27 +225,44 @@ async def cb_noop(cb: CallbackQuery):
 
 
 # ====================================================================== сообщить
+REPORT_TEXT = (
+    "🚨 <b>Сообщить о событии</b>\n\n"
+    "📍 <b>Вы на месте?</b> Нажмите кнопку «Отправить мою точку» внизу — метка будет точной до метров.\n\n"
+    "✍️ <b>Или напишите</b>, что и где:\n"
+    "<blockquote>ДПС у моста в Бажинске, тормозят всех\n"
+    "тренога на выезде из Маслянино в сторону Черепаново</blockquote>\n"
+    "📷 Можно прислать фото с подписью."
+)
+
+
 @router.message(Command("report"))
 @router.message(F.text == BTN_REPORT)
 async def report_start(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(Report.text)
-    await message.answer(
-        "🚨 <b>Что и где?</b>\n\n"
-        "• Самое точное — нажмите <b>📍 Отправить мою точку</b> (если вы на месте)\n"
-        "• Или напишите текстом: <i>«ДПС у моста в Бажинске, тормозят всех»</i>, "
-        "<i>«тренога на выезде из Маслянино в сторону Черепаново»</i>\n"
-        "• Можно прислать фото с подписью",
-        reply_markup=location_request(),
-    )
+    await message.answer(REPORT_TEXT, reply_markup=location_request())
+
+
+@router.callback_query(NavCb.filter(F.to == "report"))
+async def cb_report_start(cb: CallbackQuery, state: FSMContext, app: App, user):
+    await state.clear()
+    await state.set_state(Report.text)
+    await cb.message.answer(REPORT_TEXT, reply_markup=location_request())
+    url = await map_url(app, user, tab="report")
+    if url:
+        from ..webapp import button
+        from aiogram.types import InlineKeyboardMarkup
+        await cb.message.answer("…или отметьте точку на карте:", reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[button("🗺 Отметить на карте", url)]]))
+    await cb.answer()
 
 
 @router.callback_query(RepCb.filter(F.act == "cancel"))
-async def report_cancel(cb: CallbackQuery, state: FSMContext):
+async def report_cancel(cb: CallbackQuery, state: FSMContext, app: App):
     await state.clear()
     await cb.message.edit_text("Отменено.")
-    await cb.message.answer("Главное меню", reply_markup=main_menu())
     await cb.answer()
+    await send_home(cb, app, await app.db.get_user(cb.from_user.id))
 
 
 @router.callback_query(RepCb.filter(F.act.in_({"kind", "retype"})))
@@ -256,6 +375,8 @@ async def any_location(message: Message, app: App, state: FSMContext):
         await app.notifier.on_live_location(user, loc.latitude, loc.longitude, loc.heading)
     else:
         await app.db.set_location(uid, loc.latitude, loc.longitude, loc.heading)
+        await message.answer(f"📍 Точка получена: <b>{esc(app.geo.describe(loc.latitude, loc.longitude))}</b>",
+                             reply_markup=main_menu())
     await show_nearby(message, app, loc.latitude, loc.longitude)
 
 
@@ -273,7 +394,7 @@ async def show_nearby(message: Message, app: App, lat: float, lon: float, radius
     near = await app.events.active_near(lat, lon, radius)
     where = app.geo.describe(lat, lon)
     if not near:
-        text = f"✅ <b>В радиусе {radius:g} км всё спокойно</b>\n📍 {esc(where)}"
+        text = f"🟢 <b>В радиусе {radius:g} км всё спокойно</b>\n📍 {esc(where)}"
     else:
         lines = [f"📍 <b>Рядом с вами</b> ({esc(where)}) — "
                  f"{len(near)} {plural(len(near), 'событие', 'события', 'событий')}:\n"]
@@ -284,13 +405,27 @@ async def show_nearby(message: Message, app: App, lat: float, lon: float, radius
     await message.answer(text, reply_markup=nearby_kb())
 
 
+NEAR_ASK = ("📍 <b>Что рядом?</b>\n\nНажмите кнопку «Отправить мою точку» внизу "
+            "(или 📎 → Геопозиция) — покажу события вокруг и дам отметить новое в одно касание.")
+
+
 @router.message(Command("near"))
 async def cmd_near(message: Message, app: App, user):
     loc = fresh_location(user, 30)
     if loc:
         await show_nearby(message, app, *loc)
     else:
-        await message.answer("Отправьте геопозицию кнопкой «📍 Что рядом».", reply_markup=main_menu())
+        await message.answer(NEAR_ASK, reply_markup=location_request())
+
+
+@router.callback_query(NavCb.filter(F.to == "near"))
+async def cb_near(cb: CallbackQuery, app: App, user):
+    loc = fresh_location(user, 30)
+    if loc:
+        await show_nearby(cb.message, app, *loc)
+    else:
+        await cb.message.answer(NEAR_ASK, reply_markup=location_request())
+    await cb.answer()
 
 
 # ====================================================================== голосование
@@ -313,7 +448,7 @@ async def ev_card(cb: CallbackQuery, callback_data: EvCb, app: App, user, is_adm
         return
     loc = fresh_location(user)
     text = event_card(e, app.cfg.tz, *(loc or (None, None)))
-    kb = event_kb(e, show_card_btn=True, is_admin=is_admin)
+    kb = with_home(event_kb(e, show_card_btn=True, is_admin=is_admin, map_url=await map_url(app, user, focus=e["id"])))
     if e["photo_id"] and len(text) <= 1024:
         await cb.message.answer_photo(e["photo_id"], caption=text, reply_markup=kb)
     else:
@@ -342,16 +477,17 @@ async def render_feed(app: App, user, page: int) -> tuple[str, object]:
     if loc:
         events.sort(key=lambda e: haversine(loc[0], loc[1], e["lat"], e["lon"]) if e["lat"] is not None else 999)
     if not events:
-        return ("✅ <b>Сейчас на дорогах спокойно</b>\nАктивных событий нет. "
-                "Увидели ДПС — просто напишите мне!"), feed_kb([], 0, 1)
+        return ("🟢 <b>Сейчас на дорогах спокойно</b>\n\nАктивных событий нет. "
+                "Увидели ДПС — просто напишите мне!"), feed_kb([], 0, 1, await map_url(app, user))
     pages = (len(events) + FEED_PAGE - 1) // FEED_PAGE
     page = max(0, min(page, pages - 1))
     chunk = events[page * FEED_PAGE:(page + 1) * FEED_PAGE]
-    head = f"📋 <b>Сейчас на дорогах</b> — {len(events)} {plural(len(events), 'событие', 'события', 'событий')}"
+    head = f"📋 <b>Сейчас на дорогах: {len(events)}</b> {plural(len(events), 'событие', 'события', 'событий')}"
     if loc:
-        head += " (ближайшие сверху)"
+        head += "\n<i>ближайшие к вам — сверху</i>"
     body = "\n".join(event_line(e, app.cfg.tz, *(loc or (None, None))) for e in chunk)
-    return f"{head}\n\n{body}\n\nНажмите номер, чтобы открыть карточку:", feed_kb(chunk, page, pages)
+    return (f"{head}\n\n{body}\n\n<i>Нажмите номер, чтобы открыть карточку.</i>",
+            feed_kb(chunk, page, pages, await map_url(app, user)))
 
 
 @router.message(Command("feed"))
@@ -374,8 +510,14 @@ async def cb_feed(cb: CallbackQuery, callback_data: NavCb, app: App, user):
 # ====================================================================== карты
 @router.message(Command("map"))
 @router.message(F.text == BTN_MAP)
-async def cmd_map(message: Message):
-    await message.answer("🗺 Какую карту показать?", reply_markup=map_kb())
+async def cmd_map(message: Message, app: App, user):
+    url = await map_url(app, user)
+    kb = map_kb()
+    if url:
+        from ..webapp import button
+        kb.inline_keyboard.insert(0, [button("🗺 Открыть интерактивную карту", url)])
+    await message.answer("🗺 <b>Карта</b>\n\nВ мини-приложении — живая карта со списком и отметкой событий. "
+                         "Ещё можно получить картинку или HTML-файл.", reply_markup=kb)
 
 
 @router.callback_query(NavCb.filter(F.to.in_({"map_html", "map_png", "map_heat"})))
@@ -406,6 +548,8 @@ async def cb_map(cb: CallbackQuery, callback_data: NavCb, app: App, user):
 async def render_forecast(app: App, offset_h: int) -> tuple[str, object]:
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+    from ..keyboards import HOME_BTN
+
     at = datetime.now(app.cfg.tz) + timedelta(hours=offset_h)
     spots, total, hours = await hotspots(app.db, app.geo, app.cfg.tz, at)
     head = f"🔮 <b>Прогноз на {WEEKDAYS[at.weekday()]}, {at:%H}:00</b>\n"
@@ -425,6 +569,7 @@ async def render_forecast(app: App, offset_h: int) -> tuple[str, object]:
     for h, title in ((0, "Сейчас"), (1, "+1 ч"), (3, "+3 ч"), (12, "+12 ч")):
         b.button(text=("• " if h == offset_h else "") + title, callback_data=NavCb(to="fc", page=h))
     b.adjust(4)
+    b.row(HOME_BTN)
     return text, b.as_markup()
 
 
@@ -446,20 +591,44 @@ async def cb_forecast(cb: CallbackQuery, callback_data: NavCb, app: App):
 
 
 # ====================================================================== профиль
+@router.callback_query(NavCb.filter(F.to == "me"))
+async def cb_me(cb: CallbackQuery, app: App, user):
+    await cb.answer()
+    await cmd_me(cb.message, app, user, edit=True)
+
+
 @router.message(Command("me"))
-async def cmd_me(message: Message, app: App, user):
-    prem = "нет"
+async def cmd_me(message: Message, app: App, user, edit: bool = False):
+    prem = "не активен"
     if user["premium_until"] and user["premium_until"] > now_db():
         prem = "до " + from_db(user["premium_until"]).astimezone(app.cfg.tz).strftime("%d.%m.%Y")
-    status = "🛡 доверенный (публикация без проверки)" if user["trusted"] else "обычный"
-    await message.answer(
-        "👤 <b>Ваш профиль</b>\n\n"
-        f"⭐ Репутация: <b>{user['reputation']:g}</b> · статус: {status}\n"
-        f"📝 Отчётов: {user['reports']} · подтверждено: {user['reports_ok']} · фейков: {user['reports_fake']}\n"
-        f"🗳 Голосов: {user['votes']}\n"
+    if user["trusted"]:
+        status = "🛡 доверенный — публикуете без проверки"
+    elif user["reputation"] < 0:
+        status = "⚠️ отчёты проверяет модератор"
+    else:
+        status = "🙂 обычный"
+    threshold = app.db.setting_float("trust_threshold") or 5
+    progress = ""
+    if not user["trusted"] and user["reputation"] >= 0:
+        filled = int(min(user["reputation"] / threshold, 1) * 10)
+        progress = f"\n<code>{'▰' * filled}{'▱' * (10 - filled)}</code> до доверенного: {user['reputation']:g}/{threshold:g}"
+    text = (
+        f"👤 <b>{esc(user['full_name'] or 'Ваш профиль')}</b>\n\n"
+        f"⭐ Репутация: <b>{user['reputation']:g}</b>{progress}\n"
+        f"Статус: {status}\n\n"
+        f"📝 Отчётов: <b>{user['reports']}</b> · ✅ подтверждено: {user['reports_ok']} · 🚫 фейков: {user['reports_fake']}\n"
+        f"🗳 Голосов: <b>{user['votes']}</b>\n"
         f"💎 Премиум: {prem}\n\n"
-        "Репутация растёт, когда ваши отчёты подтверждают другие водители."
+        "<i>Репутация растёт, когда ваши отчёты подтверждают другие водители.</i>"
     )
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=with_home())
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=with_home())
 
 
 # ====================================================================== свободный текст

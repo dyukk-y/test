@@ -15,11 +15,12 @@ from ..utils import from_db, now_db, to_db, utcnow
 router = Router(name="settings")
 
 SETTINGS_TEXT = (
-    "⚙️ <b>Настройки уведомлений</b>\n\n"
-    "Бот присылает уведомления о новых событиях:\n"
-    "• 🏘 в сёлах, на которые вы подписаны\n"
-    "• 📍 рядом с вашей последней точкой (действует 3 часа после отправки)\n"
-    "• 🛰 впереди по курсу, если вы транслируете геопозицию в дороге"
+    "🔔 <b>Уведомления</b>\n\n"
+    "Я пришлю сообщение, когда появится событие:\n"
+    "🏘 в сёлах, на которые вы подписаны\n"
+    "📍 рядом с вашей последней точкой <i>(3 часа после отправки)</i>\n"
+    "🛰 впереди по курсу, пока вы транслируете геопозицию\n\n"
+    "<i>Настройте под себя:</i>"
 )
 
 
@@ -136,14 +137,14 @@ async def cb_zone(cb: CallbackQuery, callback_data: ZoneCb, app: App):
 
 # ====================================================================== премиум
 PREMIUM_TEXT = (
-    "⭐ <b>Премиум</b>\n\n"
+    "⭐ <b>Премиум</b>\n"
     "{status}\n\n"
-    "<b>Что даёт:</b>\n"
-    "🛰 Предупреждения <b>впереди по курсу</b> в режиме «в дороге»\n"
-    "📏 Радиус уведомлений до 10 км\n"
-    "🏘 Подписка на любое число сёл\n"
-    "❤️ Поддержку развития бота\n\n"
-    "Оплата — Telegram Stars, прямо в Telegram."
+    "🛰 <b>Предупреждения впереди по курсу</b>\n"
+    "<i>транслируете геопозицию — я слежу за дорогой перед вами</i>\n\n"
+    "📏 <b>Радиус уведомлений до 10 км</b>\n"
+    "🏘 <b>Сколько угодно сёл в подписке</b>\n"
+    "❤️ <b>Поддержка развития бота</b>\n\n"
+    "Оплата звёздами Telegram — в пару касаний, без карт и переводов."
 )
 
 
@@ -151,7 +152,8 @@ PREMIUM_TEXT = (
 @router.message(F.text == BTN_PREMIUM, F.chat.type == "private")
 async def cmd_premium(message: Message, app: App, user):
     if not app.cfg.premium_enabled:
-        await message.answer("🎁 Сейчас все функции бота бесплатны для всех!")
+        from ..keyboards import with_home
+        await message.answer("🎁 Сейчас все функции бота бесплатны для всех!", reply_markup=with_home())
         return
     if user["premium_until"] and user["premium_until"] > now_db():
         until = from_db(user["premium_until"]).astimezone(app.cfg.tz).strftime("%d.%m.%Y")
@@ -159,6 +161,12 @@ async def cmd_premium(message: Message, app: App, user):
     else:
         status = "Сейчас не активен."
     await message.answer(PREMIUM_TEXT.format(status=status), reply_markup=premium_kb(app.cfg.premium_plans))
+
+
+@router.callback_query(NavCb.filter(F.to == "premium"))
+async def cb_premium(cb: CallbackQuery, app: App, user):
+    await cb.answer()
+    await cmd_premium(cb.message, app, user)
 
 
 @router.callback_query(PremCb.filter())

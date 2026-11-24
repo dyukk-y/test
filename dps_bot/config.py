@@ -54,6 +54,7 @@ class Config:
     premium_plans: list[tuple[int, int]] = field(default_factory=lambda: [(7, 50), (30, 150), (365, 990)])
 
     backup_chat_id: str | None = None
+    webapp_url: str | None = None  # HTTPS-адрес мини-аппа (docs/index.html)
 
     @property
     def tz(self) -> ZoneInfo:
@@ -82,6 +83,7 @@ def load_config() -> Config:
         api_hash=os.environ.get("TG_API_HASH", "").strip() or None,
         premium_enabled=os.environ.get("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no", ""),
         backup_chat_id=os.environ.get("BACKUP_CHAT_ID", "").strip() or None,
+        webapp_url=os.environ.get("WEBAPP_URL", "").strip() or None,
         nominatim_user_agent=os.environ.get("NOMINATIM_USER_AGENT", "dps-guardian-bot/3.0"),
     )
     if os.environ.get("PREMIUM_PLANS"):

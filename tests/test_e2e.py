@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 
 from aiogram.types import CallbackQuery, Chat, Location, Message, Update, User
 
-from dps_bot.__main__ import setup_dispatcher
+from dps_bot.__main__ import setup_dispatcher as _setup_dispatcher
+from dps_bot.handlers import admin as h_admin, group as h_group, settings as h_settings, user as h_user
 from dps_bot.app import App
 from dps_bot.config import Config
 from dps_bot.db import Database
@@ -39,11 +40,37 @@ def cb(uid: int, data: str) -> Update:
         id=str(next(_ids)), from_user=user(uid), chat_instance="1", message=m, data=data))
 
 
+OPEN_DBS: list = []
+
+
+def setup_dispatcher(app, throttle=0):
+    """Роутеры — синглтоны модулей: отвязываем их от диспетчера прошлого теста."""
+    for r in (h_admin.router, h_group.router, h_settings.router, h_user.router):
+        r._parent_router = None
+    return _setup_dispatcher(app, throttle=throttle)
+
+
+def run(coro):
+    """Запустить сценарий и гарантированно закрыть БД (иначе поток aiosqlite вешает pytest)."""
+    async def wrapper():
+        try:
+            await coro
+        finally:
+            for d in OPEN_DBS:
+                try:
+                    await d.close()
+                except Exception:
+                    pass
+            OPEN_DBS.clear()
+    asyncio.run(wrapper())
+
+
 async def make_app(tmp_path, bot):
-    cfg = Config(bot_token="x", owner_ids=[OWNER], data_dir=str(tmp_path),
+    cfg = Config(bot_token="x", owner_ids=[OWNER], data_dir=str(tmp_path), webapp_url="https://example.org/app",
                  nominatim_url="http://127.0.0.1:9/none")  # геокодер «офлайн»
     db = Database(cfg.db_path)
     await db.connect()
+    OPEN_DBS.append(db)
     await db.set_setting("moderation", "off")
     geo = Geo(db, cfg)
     await geo.load_places()
@@ -148,7 +175,7 @@ def test_full_flow(tmp_path, fake_bot):
 
         await app.db.close()
 
-    asyncio.run(scenario())
+    run(scenario())
 
 
 def test_expire_and_fake(tmp_path, fake_bot):
@@ -172,4 +199,48 @@ def test_expire_and_fake(tmp_path, fake_bot):
         assert await app.events.expire() == 1
         await app.db.close()
 
-    asyncio.run(scenario())
+    run(scenario())
+
+
+def test_webapp_flow(tmp_path, fake_bot):
+    bot, s = fake_bot
+
+    async def scenario():
+        import base64
+        import json
+
+        from dps_bot.webapp import build_url, parse_start
+
+        app = await make_app(tmp_path, bot)
+        dp = setup_dispatcher(app, throttle=0)
+        feed = lambda u: dp.feed_update(bot, u)  # noqa: E731
+
+        await feed(msg(21, "/start"))
+        # главное меню — inline, с кнопкой мини-аппа
+        home = [m for m in s.of("SendMessage") if "DPS Guardian" in (m.text or "")][-1]
+        assert home.reply_markup.inline_keyboard[0][0].web_app.url.startswith("https://example.org/app/#d=")
+
+        # отчёт из мини-аппа через deep-link
+        await feed(msg(21, "/start r_p_5437264_8427639"))
+        e = (await app.events.active())[0]
+        assert e["kind"] == "police" and abs(e["lat"] - 54.37264) < 1e-6 and e["place"] == "Бажинск"
+
+        # снимок в ссылке декодируется обратно
+        url = build_url("https://example.org/app", "dps_test_bot", await app.events.active(), (54.3, 84.2), e["id"])
+        raw = url.split("#d=")[1]
+        data = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+        assert data["b"] == "dps_test_bot" and data["e"][0][0] == e["id"] and data["f"] == e["id"]
+
+        # голос из мини-аппа
+        await feed(msg(22, "/start"))
+        await feed(msg(22, f"/start v_{e['id']}_h"))
+        assert (await app.events.get(e["id"]))["confirms"] == 1
+        assert parse_start("r_q_1_2") is None and parse_start("v_5_g") == ("vote", 5, "gone")
+
+        # навигация по inline-меню
+        for to in ("home", "feed", "report", "near", "fc", "settings", "me", "premium", "help"):
+            await feed(cb(22, f"nav:{to}:0"))
+        assert any("Сообщить о событии" in t for t in s.texts(22))
+        await app.db.close()
+
+    run(scenario())

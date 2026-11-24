@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
-                           ReplyKeyboardMarkup)
+                           ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .gazetteer import Place
@@ -60,18 +60,32 @@ BTN_HELP = "❓ Помощь"
 BTN_HERE = "📍 Отправить мою точку"
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_LOCATION, request_location=True), KeyboardButton(text=BTN_REPORT)],
-            [KeyboardButton(text=BTN_FEED), KeyboardButton(text=BTN_MAP)],
-            [KeyboardButton(text=BTN_FORECAST), KeyboardButton(text=BTN_SETTINGS)],
-            [KeyboardButton(text=BTN_PREMIUM), KeyboardButton(text=BTN_HELP)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Напишите, где ДПС, или отправьте точку",
-    )
+def main_menu() -> ReplyKeyboardRemove:
+    """Меню теперь на inline-кнопках; этим убираем старую клавиатуру снизу."""
+    return ReplyKeyboardRemove()
+
+
+def home_kb(webapp_url: str | None = None) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if webapp_url:
+        b.row(InlineKeyboardButton(text="🗺 Открыть карту", web_app=WebAppInfo(url=webapp_url)))
+    b.row(InlineKeyboardButton(text="📋 Сейчас на дорогах", callback_data=NavCb(to="feed").pack()),
+          InlineKeyboardButton(text="🚨 Сообщить", callback_data=NavCb(to="report").pack()))
+    b.row(InlineKeyboardButton(text="📍 Что рядом", callback_data=NavCb(to="near").pack()),
+          InlineKeyboardButton(text="🔮 Прогноз", callback_data=NavCb(to="fc").pack()))
+    b.row(InlineKeyboardButton(text="⚙️ Уведомления", callback_data=NavCb(to="settings").pack()),
+          InlineKeyboardButton(text="👤 Профиль", callback_data=NavCb(to="me").pack()))
+    b.row(InlineKeyboardButton(text="⭐ Премиум", callback_data=NavCb(to="premium").pack()),
+          InlineKeyboardButton(text="❓ Помощь", callback_data=NavCb(to="help").pack()))
+    return b.as_markup()
+
+
+HOME_BTN = InlineKeyboardButton(text="◀️ В меню", callback_data=NavCb(to="home").pack())
+
+
+def with_home(kb: InlineKeyboardMarkup | None = None) -> InlineKeyboardMarkup:
+    rows = list(kb.inline_keyboard) if kb else []
+    return InlineKeyboardMarkup(inline_keyboard=rows + [[HOME_BTN]])
 
 
 def location_request() -> ReplyKeyboardMarkup:
@@ -91,7 +105,7 @@ def kinds_kb(prefix_text: str = "") -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def event_kb(e, show_card_btn: bool = False, is_admin: bool = False) -> InlineKeyboardMarkup:
+def event_kb(e, show_card_btn: bool = False, is_admin: bool = False, map_url: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     eid = e["id"]
     b.row(
@@ -106,6 +120,8 @@ def event_kb(e, show_card_btn: bool = False, is_admin: bool = False) -> InlineKe
             InlineKeyboardButton(text="Яндекс", url=ya),
             InlineKeyboardButton(text="Google", url=go),
         )
+    if map_url:
+        b.row(InlineKeyboardButton(text="🗺 Открыть на карте", web_app=WebAppInfo(url=map_url)))
     if show_card_btn:
         b.row(InlineKeyboardButton(text="🔄 Обновить", callback_data=EvCb(act="card", id=eid).pack()))
     if is_admin:
@@ -143,7 +159,7 @@ def villages_kb(villages: list[Place], page: int, act: str = "pickv", per_page: 
     return b.as_markup()
 
 
-def feed_kb(events: list, page: int, pages: int) -> InlineKeyboardMarkup:
+def feed_kb(events: list, page: int, pages: int, map_url: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for e in events:
         from .kinds import kind
@@ -156,10 +172,13 @@ def feed_kb(events: list, page: int, pages: int) -> InlineKeyboardMarkup:
     if page < pages - 1:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=NavCb(to="feed", page=page + 1).pack()))
     b.row(*nav)
+    if map_url:
+        b.row(InlineKeyboardButton(text="🗺 Открыть карту", web_app=WebAppInfo(url=map_url)))
     b.row(
-        InlineKeyboardButton(text="🗺 HTML-карта", callback_data=NavCb(to="map_html").pack()),
         InlineKeyboardButton(text="🖼 Картинка", callback_data=NavCb(to="map_png").pack()),
+        InlineKeyboardButton(text="📄 HTML-файл", callback_data=NavCb(to="map_html").pack()),
     )
+    b.row(HOME_BTN)
     return b.as_markup()
 
 
@@ -170,6 +189,7 @@ def map_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🖼 Картинка", callback_data=NavCb(to="map_png").pack()),
     )
     b.row(InlineKeyboardButton(text="🔥 Карта «горячих точек» за 30 дней", callback_data=NavCb(to="map_heat").pack()))
+    b.row(HOME_BTN)
     return b.as_markup()
 
 
@@ -178,7 +198,7 @@ def nearby_kb() -> InlineKeyboardMarkup:
     for k in KINDS.values():
         b.button(text=f"{k.emoji} Тут {k.title.split(' /')[0].lower()}", callback_data=RepCb(act="here", val=k.code))
     b.adjust(2)
-    b.row(InlineKeyboardButton(text="🔄 Обновить (отправьте точку снова)", callback_data="noop"))
+    b.row(HOME_BTN)
     return b.as_markup()
 
 
@@ -197,6 +217,7 @@ def settings_kb(u, zones_cnt: int) -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="🎚 Какие события присылать", callback_data=SetCb(key="kinds").pack()))
     b.row(InlineKeyboardButton(text=f"🏘 Мои сёла ({zones_cnt})", callback_data=ZoneCb(idx=-1).pack()))
     b.row(InlineKeyboardButton(text="🛰 Режим «в дороге» (live)", callback_data=SetCb(key="live").pack()))
+    b.row(HOME_BTN)
     return b.as_markup()
 
 
@@ -254,6 +275,7 @@ def premium_kb(plans: list[tuple[int, int]]) -> InlineKeyboardMarkup:
     for days, stars in plans:
         b.button(text=f"⭐ {stars} — {days} дн.", callback_data=PremCb(days=days))
     b.adjust(1)
+    b.row(HOME_BTN)
     return b.as_markup()
 
 
