@@ -334,6 +334,10 @@ async def report_here(cb: CallbackQuery, callback_data: RepCb, state: FSMContext
     if not loc:
         await cb.answer("Геопозиция устарела — отправьте точку ещё раз", show_alert=True)
         return
+    if not app.geo.in_bounds(*loc):
+        await cb.answer(f"Вы за пределами района ({app.cfg.region_name}) — отметить событие здесь нельзя.",
+                        show_alert=True)
+        return
     d = await build_draft(app, None)
     d.update(kind=callback_data.val, lat=loc[0], lon=loc[1], acc=50, method="gps",
              label=app.geo.describe(*loc))
@@ -391,6 +395,14 @@ async def live_update(message: Message, app: App):
 
 
 async def show_nearby(message: Message, app: App, lat: float, lon: float, radius: float = 10) -> None:
+    if not app.geo.in_bounds(lat, lon):
+        c = app.cfg.center
+        km = haversine(lat, lon, c[0], c[1])
+        await message.answer(
+            f"🧭 <b>Вы в {km:.0f} км от района</b>\n\n"
+            f"Я работаю в пределах: {esc(app.cfg.region_name)}. Когда будете там — пришлите точку снова, "
+            "а пока можно посмотреть, что происходит на дорогах.", reply_markup=with_home())
+        return
     near = await app.events.active_near(lat, lon, radius)
     where = app.geo.describe(lat, lon)
     if not near:
