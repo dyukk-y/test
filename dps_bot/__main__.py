@@ -99,6 +99,12 @@ async def main() -> None:
                               scope=BotCommandScopeAllGroupChats())
 
     await app.parser.start()
+    web = None
+    if cfg.webapp_port:
+        from .webserver import WebServer
+
+        web = WebServer(app, cfg.webapp_port)
+        await web.start()
     tasks = start_all(app)
     me = await bot.me()
     log.info("🚀 @%s запущен (%s)", me.username, cfg.region_name)
@@ -108,6 +114,8 @@ async def main() -> None:
         for t in tasks:
             t.cancel()
         await app.parser.stop()
+        if web:
+            await web.stop()
         await geo.close()
         await db.close()
         await bot.session.close()

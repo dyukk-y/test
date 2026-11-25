@@ -1,0 +1,26 @@
+# systemd-служба для запуска без Docker.
+# Установка:
+#   sudo useradd -r -m -d /opt/dps-bot dps
+#   sudo -u dps git clone https://github.com/dyukk-y/test.git /opt/dps-bot
+#   cd /opt/dps-bot && sudo -u dps python3 -m venv .venv && sudo -u dps .venv/bin/pip install -r requirements.txt
+#   sudo -u dps cp .env.example .env && sudo -u dps nano .env
+#   sudo cp deploy/dps-bot.service /etc/systemd/system/ && sudo systemctl enable --now dps-bot
+#   journalctl -u dps-bot -f      # логи
+[Unit]
+Description=DPS Guardian Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=dps
+WorkingDirectory=/opt/dps-bot
+EnvironmentFile=/opt/dps-bot/.env
+ExecStart=/opt/dps-bot/.venv/bin/python -m dps_bot
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

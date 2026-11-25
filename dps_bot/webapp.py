@@ -26,7 +26,7 @@ def _pack(obj) -> str:
 
 
 def build_url(base: str, bot_username: str, events: list, user_loc=None, focus: int = 0,
-              tab: str | None = None) -> str:
+              tab: str | None = None, api: str | None = None) -> str:
     items = []
     for e in events:
         if e["lat"] is None:
@@ -41,6 +41,8 @@ def build_url(base: str, bot_username: str, events: list, user_loc=None, focus: 
         data["u"] = [round(user_loc[0], 4), round(user_loc[1], 4)]
     if focus:
         data["f"] = focus
+    if api:
+        data["a"] = api
     suffix = "&tab=report" if tab == "report" else ""
     url = f"{base.rstrip('/')}/#d={_pack(data)}{suffix}"
     while len(url) > MAX_URL and data["e"]:  # оставляем самые свежие

@@ -1,0 +1,6 @@
+# Автоматический HTTPS (Let's Encrypt) для мини-аппа и его API.
+# DOMAIN задаётся в .env, A-запись домена должна указывать на сервер.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy bot:8080
+}

@@ -24,10 +24,14 @@ Telegram-бот для водителей Маслянинского район�
 живая карта с метками и точностью, список «ближайшие / свежие» с расстояниями, отметка события
 в два касания — по GPS или тапом по карте. Цвета подстраиваются под тему Telegram.
 
-Сервер для него не нужен: страница `docs/index.html` статическая, данные бот передаёт в ссылке,
-а отчёты и голоса возвращаются в бота через deep-link. Размещение на GitHub Pages:
-**Settings → Pages → Build and deployment → Deploy from a branch → `main` / `/docs` → Save**,
-затем в `.env`: `WEBAPP_URL=https://<логин>.github.io/<репозиторий>/`.
+Два режима:
+* **Без сервера** — страница `docs/index.html` на GitHub Pages, данные бот передаёт в ссылке (снимок),
+  отчёты и голоса возвращаются в бота через deep-link. Включение:
+  **Settings → Pages → Deploy from a branch → `main` / `/docs` → Save**, затем в `.env`
+  `WEBAPP_URL=https://<логин>.github.io/<репозиторий>/`.
+* **Живой** — бот сам отдаёт страницу и API (`WEBAPP_PORT`), карта обновляется каждые 30 секунд,
+  отчёт с комментарием и голоса — без выхода из приложения. Каждый запрос проверяется по подписи
+  Telegram (`initData`), подделать пользователя нельзя. Нужен домен с HTTPS — см. «Постоянный хостинг».
 
 ### Сбор данных
 * **Водители** — текст, фото с подписью, геопозиция.
@@ -86,6 +90,24 @@ python -m dps_bot
 2. `/admin` → 👥 Аккаунты-парсеры → добавить (лучше отдельный аккаунт, не основной).
    Код из Telegram вводите **с пробелами** (`1 2 3 4 5`), иначе Telegram его аннулирует.
 3. `/admin` → 📡 Источники → добавить `@канал` или ссылку-приглашение.
+
+## Постоянный хостинг (24/7)
+
+Подойдёт любой VPS с Linux (1 ядро, 1 ГБ RAM) или домашний компьютер.
+
+**Docker + живой мини-апп с HTTPS** (нужен домен, A-запись → IP сервера):
+```bash
+git clone https://github.com/dyukk-y/test.git dps-bot && cd dps-bot
+cp .env.example .env   # BOT_TOKEN, OWNER_IDS, DOMAIN=dps.example.ru, WEBAPP_PORT=8080, WEBAPP_URL=https://dps.example.ru/
+docker compose --profile web up -d --build
+```
+Caddy сам получит сертификат Let's Encrypt. Проверка: `https://dps.example.ru/health`.
+
+**Без домена**: `docker compose up -d --build` — бот работает, мини-апп в режиме снимка с GitHub Pages.
+
+**Без Docker** — systemd-служба, инструкция в `deploy/dps-bot.service`.
+
+Обновление: `git pull && docker compose --profile web up -d --build`. Данные — в `data/`, бэкап ежедневно.
 
 ## Разработка
 

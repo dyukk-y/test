@@ -81,7 +81,7 @@ class Geo:
         p, km = self.nearest_village(lat, lon)
         if km < 1.5:
             return p.name
-        return f"{km:.1f} км от {p.name}"
+        return f"{p.name}, {km:.1f} км"  # без склонения: «Бажинск, 2.2 км»
 
     async def save_place(self, name: str, lat: float, lon: float, kind: str,
                          aliases: list[str] | None = None, verified: int = 2) -> Place:

@@ -7,5 +7,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dps_bot ./dps_bot
+COPY docs ./docs
 VOLUME ["/app/data"]
 CMD ["python", "-m", "dps_bot"]

@@ -95,6 +95,14 @@
   .btn.sec { background: color-mix(in srgb, var(--btn) 12%, var(--bg)); color: var(--btn); }
   .btn:disabled { opacity: .45; }
   .note { color: var(--hint); font-size: 13px; padding: 8px 4px; }
+  textarea { width: 100%; min-height: 72px; border: 0; border-radius: var(--radius); padding: 12px 14px;
+    background: var(--bg); color: var(--text); font: inherit; resize: vertical; outline: none;
+    box-shadow: inset 0 0 0 1px var(--sep); }
+  textarea:focus { box-shadow: inset 0 0 0 2px var(--btn); }
+  #toast { position: fixed; left: 50%; bottom: 84px; transform: translate(-50%, 20px); opacity: 0; z-index: 2000;
+    background: rgba(20,20,20,.88); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px;
+    transition: all .25s; pointer-events: none; max-width: 88%; text-align: center; }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
   .warn { background: #fff3cd; color: #6b5200; border-radius: 12px; padding: 10px 12px; font-size: 13px; margin-bottom: 8px; }
 </style>
 </head>
@@ -130,11 +138,16 @@
           <div class="s">нажмите на карту, чтобы поставить точку</div></div><span class="ck">✓</span></div>
       </div>
       <div id="pickmap"></div>
-      <p class="note">Подробности (номер, направление) можно потом дописать боту сообщением.</p>
+      <div id="comment-box" style="display:none">
+        <h2>Комментарий</h2>
+        <textarea id="comment" maxlength="300" placeholder="Например: тормозят всех, в сторону Новосибирска, номер А123ВС"></textarea>
+      </div>
+      <p class="note" id="report-note">Подробности (номер, направление) можно потом дописать боту сообщением.</p>
       <button class="btn" id="send" disabled>Отправить</button>
     </div>
   </section>
 
+  <div id="toast"></div>
   <nav>
     <button data-t="map" class="active"><span class="i">🗺</span>Карта</button>
     <button data-t="list"><span class="i">📋</span>Список</button>
@@ -175,8 +188,11 @@ function decode() {
 }
 const D = decode() || { e: [], t: 0, b: "" };
 const BOT = D.b || (tg?.initDataUnsafe?.receiver?.username) || "";
-const events = (D.e || []).map(a => ({ id: a[0], k: a[1], lat: a[2], lon: a[3], ts: a[4], ok: a[5], gone: a[6],
-  place: a[7] || "", dir: a[8] || "", acc: a[9] || 0 }));
+const API = D.a || null;            // адрес API бота (если бот запущен с веб-сервером)
+const parseEvents = arr => (arr || []).map(a => ({ id: a[0], k: a[1], lat: a[2], lon: a[3], ts: a[4], ok: a[5],
+  gone: a[6], place: a[7] || "", dir: a[8] || "", acc: a[9] || 0 }));
+let events = parseEvents(D.e);
+let live = false;
 let me = D.u ? { lat: D.u[0], lon: D.u[1] } : null;
 
 // ---------- утилиты
@@ -199,6 +215,33 @@ function toBot(param) {
   const url = `https://t.me/${BOT}?start=${param}`;
   if (tg?.openTelegramLink) { tg.openTelegramLink(url); setTimeout(() => tg.close(), 300); }
   else location.href = url;
+}
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text; t.classList.add("on");
+  clearTimeout(toast._h); toast._h = setTimeout(() => t.classList.remove("on"), 2600);
+}
+async function api(path, body) {
+  const r = await fetch(API + path, { method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Init-Data": tg?.initData || "" },
+    body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({ ok: false, error: "нет связи" }));
+  if (!r.ok || !j.ok) throw new Error(j.error || ("ошибка " + r.status));
+  return j;
+}
+async function refresh() {
+  if (!API || !tg?.initData) return;
+  try {
+    const j = await api("/state");
+    D.t = j.t; events = parseEvents(j.e); live = true;
+    renderMarkers(); updateStamp(); renderList();
+  } catch (e) { live = false; updateStamp(); }
+}
+async function vote(id, v) {
+  haptic("medium");
+  if (!live) return toBot(`v_${id}_${v}`);
+  try { const j = await api("/vote", { id, v }); map.closePopup(); toast(j.message); refresh(); }
+  catch (e) { toast("⚠️ " + e.message); }
 }
 function locateMe(cb) {
   if (!navigator.geolocation) return cb(null);
@@ -223,36 +266,45 @@ function popupHtml(e) {
     ${e.dir ? `<div class="m">➡️ в сторону ${esc(e.dir)}</div>` : ""}
     <div class="m">🕐 ${ago(e.ts)} · 👍 ${e.ok} · 👋 ${e.gone}</div>
     ${me ? `<div class="m">📏 ${fmtD(dist(me, e))} от вас</div>` : ""}
-    <div class="row"><button class="btn" onclick="toBot('v_${e.id}_h')">✅ Стоят</button>
-    <button class="btn sec" onclick="toBot('v_${e.id}_g')">👋 Уехали</button></div></div>`;
+    <div class="row"><button class="btn" onclick="vote(${e.id},'h')">✅ Стоят</button>
+    <button class="btn sec" onclick="vote(${e.id},'g')">👋 Уехали</button></div></div>`;
 }
-const markers = {};
-events.forEach(e => {
-  const k = KINDS[e.k] || KINDS.p;
-  const old = (Date.now() / 1000 - e.ts) > 3600;
-  const m = L.marker([e.lat, e.lon], { icon: L.divIcon({ className: "",
-    html: `<div class="mk${old ? " old" : ""}" style="background:${k.c}"><span>${k.e}</span></div>`,
-    iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }) }).addTo(map).bindPopup(() => popupHtml(e));
-  if (e.acc > 300) L.circle([e.lat, e.lon], { radius: e.acc, color: k.c, weight: 1, fillOpacity: .07 }).addTo(map);
-  markers[e.id] = m;
-});
+const layer = L.layerGroup().addTo(map);
+let markers = {};
+function renderMarkers() {
+  layer.clearLayers(); markers = {};
+  events.forEach(e => {
+    const k = KINDS[e.k] || KINDS.p;
+    const old = (Date.now() / 1000 - e.ts) > 3600;
+    const m = L.marker([e.lat, e.lon], { icon: L.divIcon({ className: "",
+      html: `<div class="mk${old ? " old" : ""}" style="background:${k.c}"><span>${k.e}</span></div>`,
+      iconSize: [34, 34], iconAnchor: [17, 34], popupAnchor: [0, -30] }) }).bindPopup(() => popupHtml(e));
+    layer.addLayer(m);
+    if (e.acc > 300) layer.addLayer(L.circle([e.lat, e.lon], { radius: e.acc, color: k.c, weight: 1, fillOpacity: .07 }));
+    markers[e.id] = m;
+  });
+}
 let meMarker = null;
 function showMe() {
   if (!me) return;
   if (meMarker) meMarker.setLatLng([me.lat, me.lon]);
   else meMarker = L.circleMarker([me.lat, me.lon], { radius: 8, color: "#fff", weight: 3, fillColor: "#2481cc", fillOpacity: 1 }).addTo(map);
 }
+renderMarkers();
 if (events.length) map.fitBounds(L.latLngBounds(events.map(e => [e.lat, e.lon])).pad(0.3), { maxZoom: 13 });
 if (D.f && markers[D.f]) { const e = events.find(x => x.id === D.f); map.setView([e.lat, e.lon], 14); markers[D.f].openPopup(); }
 showMe();
 
 const stamp = document.getElementById("stamp");
-if (!D.t) stamp.textContent = "Откройте карту из бота, чтобы увидеть события";
-else {
+function plural(n) { return n % 10 === 1 && n % 100 !== 11 ? "событие" : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? "события" : "событий"; }
+function updateStamp() {
+  if (!D.t) { stamp.textContent = "Откройте карту из бота, чтобы увидеть события"; return; }
   const n = events.length;
-  stamp.textContent = (n ? `${n} ${n % 10 === 1 && n % 100 !== 11 ? "событие" : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? "события" : "событий"}` : "Всё спокойно ✅")
-    + " · данные на " + new Date(D.t * 1000).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+  const what = n ? `${n} ${plural(n)}` : "Всё спокойно ✅";
+  stamp.textContent = live ? `🟢 ${what} · онлайн`
+    : `${what} · данные на ` + new Date(D.t * 1000).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
 }
+updateStamp();
 document.getElementById("locate").onclick = () => locateMe(p => {
   if (!p) return tg?.showAlert?.("Не удалось получить геопозицию. Разрешите доступ к местоположению.");
   showMe(); map.setView([p.lat, p.lon], 14); renderList();
@@ -263,10 +315,10 @@ legend.onAdd = () => { const d = L.DomUtil.create("div", "chip legend");
 if (window.innerHeight > 520) legend.addTo(map);
 
 // ---------- список
-let sortMode = me ? "dist" : "time";
+var sortMode = me ? "dist" : "time";
 function renderList() {
   const box = document.getElementById("list");
-  document.getElementById("stale").innerHTML = D.t && Date.now() / 1000 - D.t > 600
+  document.getElementById("stale").innerHTML = !live && D.t && Date.now() / 1000 - D.t > 600
     ? `<div class="warn">Данные на ${new Date(D.t * 1000).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}. ` +
       `<a href="#" onclick="toBot('m');return false">Обновить</a></div>` : "";
   document.querySelectorAll("#sort button").forEach(b => b.classList.toggle("on", b.dataset.s === sortMode));
@@ -295,20 +347,24 @@ document.querySelectorAll("#sort button").forEach(b => b.onclick = () => {
 renderList();
 
 // ---------- сообщить
-let kindSel = null, where = "gps", picked = null, pickMap = null, pickMarker = null;
+let kindSel = null, where = "gps", picked = null, pickMap = null, pickMarker = null, gps = null;
 const kindsBox = document.getElementById("kinds");
 kindsBox.innerHTML = Object.entries(KINDS).map(([c, k]) =>
   `<div class="kind" data-k="${c}"><div class="e">${k.e}</div><div class="n">${k.n}</div></div>`).join("");
 kindsBox.querySelectorAll(".kind").forEach(el => el.onclick = () => {
   kindSel = el.dataset.k; haptic();
   kindsBox.querySelectorAll(".kind").forEach(x => x.classList.toggle("on", x === el));
-  if (where === "gps" && !me) requestGps();
+  if (where === "gps" && !gps) requestGps();
   refreshSend();
 });
 function requestGps() {
   const st = document.getElementById("gps-state");
   st.textContent = "определяю…";
-  locateMe(p => { st.textContent = p ? `точность ±${Math.round(p.acc || 30)} м` : "нет доступа к GPS — отметьте на карте"; refreshSend(); });
+  locateMe(p => {  // только свежая точка, не из снимка
+    gps = p ? { ...p } : null;
+    st.textContent = p ? `точность ±${Math.round(p.acc || 30)} м` : "нет доступа к GPS — отметьте на карте";
+    refreshSend();
+  });
 }
 document.querySelectorAll(".opt").forEach(el => el.onclick = () => {
   where = el.dataset.w; haptic();
@@ -325,10 +381,10 @@ document.querySelectorAll(".opt").forEach(el => el.onclick = () => {
     });
   }
   if (where === "map") setTimeout(() => pickMap.invalidateSize(), 50);
-  if (where === "gps" && !me) requestGps();
+  if (where === "gps" && !gps) requestGps();
   refreshSend();
 });
-function point() { return where === "gps" ? me : picked; }
+function point() { return where === "gps" ? gps : picked; }
 function inBounds(p) { return p && p.lat >= BOUNDS[0][0] && p.lat <= BOUNDS[1][0] && p.lon >= BOUNDS[0][1] && p.lon <= BOUNDS[1][1]; }
 function refreshSend() {
   const ok = kindSel && point();
@@ -340,11 +396,25 @@ function refreshSend() {
     tg.MainButton.show();
   }
 }
-function submit() {
+let sending = false;
+async function submit() {
   const p = point();
-  if (!kindSel || !p) return;
+  if (!kindSel || !p || sending) return;
   if (!inBounds(p)) return tg?.showAlert?.("Эта точка за пределами района, который обслуживает бот.");
-  toBot(`r_${kindSel}_${Math.round(p.lat * 1e5)}_${Math.round(p.lon * 1e5)}`);
+  if (!live) return toBot(`r_${kindSel}_${Math.round(p.lat * 1e5)}_${Math.round(p.lon * 1e5)}`);
+  sending = true; tg?.MainButton?.showProgress?.();
+  try {
+    const j = await api("/report", { k: kindSel, lat: p.lat, lon: p.lon, acc: Math.round(p.acc || 60),
+      text: document.getElementById("comment").value.trim() });
+    tg?.HapticFeedback?.notificationOccurred?.("success");
+    toast({ merged: "🤝 Уже было — засчитали подтверждение", pending: "📩 Отправлено на проверку",
+            active: "✅ Опубликовано! Спасибо" }[j.status] || "✅ Готово");
+    document.getElementById("comment").value = "";
+    await refresh(); show("map");
+    const e = events.find(x => x.id === j.id);
+    if (e) { map.setView([e.lat, e.lon], 15); markers[e.id]?.openPopup(); }
+  } catch (e) { tg?.HapticFeedback?.notificationOccurred?.("error"); toast("⚠️ " + e.message); }
+  finally { sending = false; tg?.MainButton?.hideProgress?.(); }
 }
 document.getElementById("send").onclick = submit;
 tg?.MainButton?.onClick(submit);
@@ -360,6 +430,17 @@ function show(t) {
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => { haptic(); show(b.dataset.t); });
 if (location.hash.includes("tab=report")) show("report");
+
+// ---------- живой режим (если у бота включён веб-сервер)
+if (API && tg?.initData) {
+  refresh().then(() => {
+    if (live) {
+      document.getElementById("comment-box").style.display = "block";
+      document.getElementById("report-note").textContent = "Отчёт сразу появится на карте, а бот пришлёт карточку в чат.";
+    }
+  });
+  setInterval(refresh, 30000);
+}
 </script>
 </body>
 </html>

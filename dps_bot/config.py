@@ -55,6 +55,16 @@ class Config:
 
     backup_chat_id: str | None = None
     webapp_url: str | None = None  # HTTPS-адрес мини-аппа (docs/index.html)
+    webapp_port: int | None = None  # порт встроенного веб-сервера (мини-апп + API)
+    webapp_api: str | None = None   # публичный адрес API, например https://dps.example.ru/api
+
+    @property
+    def api_base(self) -> str | None:
+        if self.webapp_api:
+            return self.webapp_api.rstrip("/")
+        if self.webapp_port and self.webapp_url:  # сервер отдаёт и страницу, и API
+            return self.webapp_url.rstrip("/") + "/api"
+        return None
 
     @property
     def tz(self) -> ZoneInfo:
@@ -84,6 +94,8 @@ def load_config() -> Config:
         premium_enabled=os.environ.get("PREMIUM_ENABLED", "1").strip() not in ("0", "false", "no", ""),
         backup_chat_id=os.environ.get("BACKUP_CHAT_ID", "").strip() or None,
         webapp_url=os.environ.get("WEBAPP_URL", "").strip() or None,
+        webapp_port=int(os.environ["WEBAPP_PORT"]) if os.environ.get("WEBAPP_PORT", "").strip().isdigit() else None,
+        webapp_api=os.environ.get("WEBAPP_API", "").strip() or None,
         nominatim_user_agent=os.environ.get("NOMINATIM_USER_AGENT", "dps-guardian-bot/3.0"),
     )
     if os.environ.get("PREMIUM_PLANS"):

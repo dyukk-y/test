@@ -49,7 +49,8 @@ async def map_url(app: App, user=None, focus: int = 0, tab: str | None = None) -
         return None
     me = await app.bot.me()
     events = await app.events.active(60)
-    return build_url(app.cfg.webapp_url, me.username, events, fresh_location(user) if user else None, focus, tab)
+    return build_url(app.cfg.webapp_url, me.username, events, fresh_location(user) if user else None, focus, tab,
+                     api=app.cfg.api_base)
 
 
 async def home_view(app: App, user) -> tuple[str, object]:
